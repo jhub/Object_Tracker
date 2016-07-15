@@ -76,22 +76,24 @@ def publish_state_beh(state_beh_list, bc_interval):
 			s.y		= st_bh[0][y] 	
 			s.th 	= st_bh[0][th] 	
 			s.v_x	= st_bh[0][v_x] 
-			s.v_z	= st_bh[0][v_z] 
+			s.v_z	= st_bh[0][v_z]
+			s.MAC 	= "K1" 
 
-			#pub_state.publish(s)
+			pub_state.publish(s)
 
 			b 		= behv()
 			b.a_x 	= st_bh[1][a_x] 
-			b.a_z	= st_bh[1][a_z] 
+			b.a_z	= st_bh[1][a_z]
+			b.MAC 	= "K1" 
 
-			#pub_behv.publish(b)
+			pub_behv.publish(b)
 
-			sb = st_beh()
-			sb.MAC 		= "K1"
-			sb.state 	= s 
-			sb.beh 		= b
+			#sb 			= st_beh()
+			#sb.MAC 		= "K1"
+			#sb.state 		= s 
+			#sb.beh 		= b
 
-			pub_st_beh.publish(sb)
+			#pub_st_beh.publish(sb)
 			
 			sleep(bc_interval)
 

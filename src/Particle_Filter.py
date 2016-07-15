@@ -2,7 +2,7 @@
 import rospy
 import sys
 import tf
-#import pudb
+import pudb
 
 import numpy as np
 
@@ -11,42 +11,67 @@ from random					import random, gauss
 from math					import hypot
 from scipy.stats			import norm
 
+from obj_tr_constants		import x,y,th,v_x, v_z, a_x,a_z, data, pred_beh
+from obj_tr_constants 		import g_func_v_p
+
 
 
 class Particle_Filter(object):
 
-	def __init__(self, d_limits, array_size, g_function,h_function, R, Q):
+	def __init__(self, d_limits, array_size, g_function, g_res_fn,h_function, R, Q, init_guess):
 
-		self.g 			= g_function
-		self.R 			= R
-		self.Q 			= Q
-		self.h 			= h_function
+		self.g 				= g_function
+		self.g_res_fn 		= g_res_fn
+		self.h 				= h_function
+		self.R 				= R
+		self.Q 				= Q
 
-		self.array_size = array_size
-		self.d_limits	= d_limits
-		self.tally		= zeros(3)
+		self.array_size 	= array_size
+		self.d_limits		= d_limits
 
 		self.weights			= zeros([self.array_size,1])
 
 		self.result_points		= zeros([self.array_size,self.d_limits.shape[0]])
 
-		self.rand_all()
+		self.rand_all(init_guess)
 
 
-	def rand_all(self):
-
+	def rand_all(self, init_guess): 
 		for i in range(self.d_limits.shape[0]):
 			if i == 0:
 				self.point_list = np.random.uniform(self.d_limits[i][0],self.d_limits[i][1],self.array_size).reshape((self.array_size, 1))
 			else:
 				self.point_list = np.hstack((self.point_list,np.random.uniform(self.d_limits[i][0],self.d_limits[i][1],self.array_size).reshape((self.array_size, 1))))
+		
+		if init_guess is not None and len(self.point_list) > 0:
+			self.point_list[-1] = init_guess
 
 
-	def upd_points(self, point):
+	def upd_points(self, sensor_point):
 		#pudb.set_trace()
-		tot_weight = self.set_weights(point)
+		tot_weight = self.set_weights(sensor_point)
 		self.normalize_weights(tot_weight)
 		self.resample()
+		return self.get_mean_and_var(self.point_list)
+
+
+	def set_weights(self, sensor_point):
+		tot_weight = 0
+		for i in range(len(self.point_list)):
+			self.set_weight(self.point_list[i],sensor_point,i)
+			tot_weight = tot_weight + self.weights[i]
+		return tot_weight
+
+
+	def set_weight(self,filter_point, sensor_point, index):
+		diffs 				= self.g_res_fn(filter_point,self.h(sensor_point))
+		# multiply the probabilities of each dimention
+		self.weights[index] = prod(norm(0,diag(self.Q)).pdf(diffs))
+
+
+	def normalize_weights(self, tot_weight):
+		for i in range(len(self.point_list)):
+			self.weights[i] = self.weights[i] / tot_weight
 
 
 	def resample(self):
@@ -75,70 +100,23 @@ class Particle_Filter(object):
 
 		mean = np.mean(self.point_list, axis=0)
 
-		if mean[3] < 0.05:
-			self.tally[0] += 1
-		elif mean[3] > 0.95:
-			self.tally[1] += 1
-		else:
-			self.tally[2] += 1
 
-		print("Percentage Guessed:")
-		print((self.tally[0] + self.tally[1]) /self.tally.sum())
-		
-		if (self.tally[0] + self.tally[1]) > 0:
-			print("Not compromized accuracy:")
-			print(self.tally[0] /(self.tally[0] + self.tally[1]))
-		else:
-			print("DID NOT MAKE GUESSES!!!")
-
-
-	def set_weights(self, sensor_point):
-		tot_weight = 0
-		for i in range(len(self.point_list)):
-			self.set_weight(self.point_list[i],sensor_point,i)
-			tot_weight = tot_weight + self.weights[i]
-
-		return tot_weight
-
-
-	def normalize_weights(self, tot_weight):
-		for i in range(len(self.point_list)):
-			self.weights[i] = self.weights[i] / tot_weight
-
-
-	def set_weight(self,filter_point, sensor_point, index):
-
-		diffs 				= self.residual_fn(sensor_point,self.h(filter_point))
-		# multiply the probabilities of each dimention
-		self.weights[index] = prod(norm(0,diag(self.Q)).pdf(diffs))
-
-
-	def residual_fn(self, z, mean):
-
-		residual 	= z - mean
-
-		while residual[2] > pi:
-			residual[2] -= 2 * pi
-
-		while residual[2] < -pi:
-			residual[2] += 2 * pi
-
-		return residual
+	def get_mean_and_var(self,pointList):
+		mean = np.mean(pointList, axis=0)
+		cov  = np.cov(pointList.T)
+		return (mean, cov)
 
 
 	def move_all(self,control,dt):
 		for i in range(self.array_size):
 			self.point_list[i] = self.move(self.point_list[i],control,self.g,dt)
-		return self.point_list
 
 
 	def move(self,point,control,g,dt):
-		mean 				= g(control, point,dt)
+		mean 				= g(point, control, dt)
 		mean				= diag(gauss(mean, self.R)).copy()
-
-		if mean[3] > 1:
-			mean[3] = 1
-		elif mean[3] < 0:
-			mean[3] = 0
-
 		return mean
+
+
+	def get_pt_list(self): 
+		return self.point_list
