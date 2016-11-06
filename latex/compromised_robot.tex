@@ -1,0 +1,169 @@
+\documentclass{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+
+\title{Compromisation Estimation}
+\author{Tipakorn Greigarn}
+
+\begin{document}
+
+\maketitle
+Suppose we have a robot and an observer.
+The observer has the following model of the robot,
+
+\begin{align}
+  \text{Motion model: }& 
+  p(x_{t}| u_{t}, x_{t-1}) 
+  \label{eqn:model-motion},                                  \\
+  \text{Observation model: }& 
+  p(z_{t}| x_{t}) 
+  \label{eqn:model-observation},                             \\
+  \text{Behavior model: }& 
+  p(u_{t}| x_{t-1}, c_{t-1}) 
+  \label{eqn:model-behavior},                                \\
+  \text{Compromisation model: }& 
+  p(c_{t}| c_{t-1}, \xi_{t-1}) 
+  \label{eqn:model-Compromization}.
+\end{align}
+
+where $x_{t}$ is the state of the robot at time $t$, $z_{t}$ is the observation at time $t$, $u_{t}$ is the action the observer thinks the robot does at time $t$, and $c_{t}$ is the compromisation of the robot in question at time $t$ given a zone $\xi$.
+A belief on the state of the robot at time $t$ is defined as follows,
+
+\begin{equation}
+  b_{t} := b(x_t) := p(x_t| z_{1:t}).
+  \label{eqn:state-belief}
+\end{equation}
+
+The observer has a Bayes filter that updates the belief on the robot's state.
+
+At time $t$, the observer collects the last compromasation, combines it with previous observations $z_{1:t-1}$, and estimate how likely that the robot is compromised.
+We define the belief the observer has on the compromisation state at time $t$ as
+
+\begin{equation}
+  a_{t} := a(c_{t-1}) := p(c_{t-1}| z_{1:t}).
+  \label{eqn:compromisation-belief}
+\end{equation}
+
+The time index may seem strange but it makes sense since the observer at time $t$ is trying to determine the compromisation of the robot at time $t-1$, i.e., when the action $u_{t}$ was executed.
+Using Bayes rule, the belief $a_{t}$ can be rewritten as
+
+\begin{align}
+  p(c_{t-1}|z_{1:t})
+  &= \frac
+  {p(c_{t-1},z_{t}| z_{1:t-1})}
+  {p(z_{t}| z_{1:t-1})}, 
+  \label{eqn:bayes-inversion-1}                             \\
+  &= \eta 
+  p(z_{t}| c_{t-1}, z_{1:t-1}) 
+  p(c_{t-1}| z_{1:t-1}). 
+  \label{eqn:bayes-inversion-2}
+\end{align}
+
+The denominator becomes the normalizer $\eta$.
+Using the law of total probability the first term in \eqref{eqn:bayes-inversion-2} becomes
+
+\begin{align}
+  p(z_{t}| c_{t-1}, z_{1:t-1}) &= 
+  \int 
+  p(z_{t}| x_{t}, c_{t-1}, z_{1:t-1}) 
+  p(x_{t}| c_{t-1}, z_{1:t-1}) 
+  dx_{t},
+  \label{eqn:observation-model-1}                           \\
+  &= 
+  \int 
+  p(z_{t}| x_{t}) p(x_{t}| c_{t-1}, z_{1:t-1})
+  dx_{t}.
+  \label{eqn:observation-model-2}
+\end{align}
+
+The first term in \eqref{eqn:observation-model-2} follows from $z_{t}$ being assumed to only depend on $x_{t}$, thereby yielding our observation model.
+We expand the second term in \eqref{eqn:observation-model-2} further.
+
+\begin{align}
+  p(x_{t}| c_{t-1}, z_{1:t-1}) 
+  &= 
+  \int 
+  p(x_{t}|x_{t-1}, c_{t-1},z_{1:t-1})
+  p(x_{t-1}| c_{t-1}, z_{1:t-1})
+  dx_{t-1}
+  \label{eqn:prediction-1}
+\end{align}
+Note that the second term in \eqref{eqn:prediction-1} is precisely the state belief $b_{t-1}$.
+
+\begin{align}
+  p(x_{t-1}| c_{t-1}, z_{1:t-1})
+  &= b_{t-1}
+  \label{eqn:prediction-2}
+\end{align}
+
+The first term in \eqref{eqn:prediction-1} is trickier to deal with.
+One possibility of how to calculate it more specifically is as follows,
+
+\begin{align}
+  p(x_{t}|x_{t-1}, c_{t-1},z_{1:t-1})
+  &= 
+  p(x_{t}|x_{t-1}, c_{t-1})
+  \label{eqn:prediction-3}                               \\
+  &=
+  \int 
+  p(x_{t}|u_{t}, x_{t-1}, c_{t-1})
+  p(u_{t}|x_{t-1}, c_{t-1})
+  du_{t}
+  \label{eqn:prediction-4}                               \\
+  &=
+  \int 
+  p(x_{t}|u_{t}, x_{t-1})
+  p(u_{t}|x_{t-1}, c_{t-1})
+  du_{t}
+  \label{eqn:prediction-5}
+\end{align}
+
+We assume that $x_{t}$ is independent of the observations given in \eqref{eqn:prediction-3}. Further, $x_{t}$ is independent $c_{t-1}$ given control $u$. Note that the first term of \eqref{eqn:prediction-5} is our motion model, whereas our second term is our behavior model.
+We finally expand on the second term of \eqref{eqn:bayes-inversion-2} where we assume independence of observations given our compromised state two time steps ago.
+
+\begin{align}
+  p(c_{t-1}| z_{1:t-1})
+  &= 
+  \int 
+  p(c_{t-1}|c_{t-2}, z_{1:t-1})
+  p(c_{t-2}|z_{1:t-1})
+  dc_{t-2}
+  \label{eqn:compromized-1}  
+\end{align}
+
+We now use our observation to obtain a useful discrete zone using our last observation. To do this we utilize a delta function and assume independence in the observations. 
+
+\begin{align}
+  p(c_{t-1}|c_{t-2}, z_{1:t-1})
+  &= 
+  p(c_{t-1}|c_{t-2}, z_{t-1})                          \\
+  &= 
+  \sum_{\xi_{t-1}}
+  p(c_{t-1}|c_{t-2}, \xi_{t-1}, z_{t-1})
+  p(\xi_{t-1}|c_{t-2}, z_{t})
+  \label{eqn:compromized-2}                            \\
+  &= 
+  \sum_{\xi_{t-1}}
+  p(c_{t-1}|c_{t-2}, \xi_{t-1}, z_{t-1})
+  \delta(\xi_{t-1}-\alpha)
+  \label{eqn:compromized-3}                            \\
+  &= 
+  p(c_{t-1}|c_{t-2}, \alpha)
+  \label{eqn:compromized-4} 
+\end{align}
+
+We obtain our compromasation model from \eqref{eqn:compromized-4} where $\xi_{t-1} = \alpha$ after further assuming independence from the observations given the zone we are in. We substitute $a_{t-1}$ based on the second part of the law of total probability expansion, \eqref{eqn:compromized-1} now becomes
+
+\begin{align}
+  p(c_{t-1}| z_{1:t-1})
+  &= 
+  \int 
+  p(c_{t-1}|c_{t-2}, \xi_{t-1})
+  a_{t-1}
+  dc_{t-2}
+  \label{eqn:compromized-5}  
+\end{align}
+
+The implementation of \eqref{eqn:observation-model-1} will be a function which takes particles as inputs and utilizes the weights to multiply by the probability of the observation being the particle state. These probabilities are then summed and multiplied by the result from \eqref{eqn:bayes-inversion-2}. The particles will come from a particle filter that contains states for each particle, using the observation model as the update step and \eqref{eqn:prediction-1} as the prediction step. The state captured in the particle filter includes the position x, y and orientation $\theta$.
+\end{document}

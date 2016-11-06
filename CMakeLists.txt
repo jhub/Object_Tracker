@@ -48,9 +48,6 @@ find_package(catkin REQUIRED COMPONENTS
  add_message_files(
   DIRECTORY msg
     FILES
-    behv.msg
-    state.msg
-    st_beh.msg
  )
 
 ## Generate services in the 'srv' folder

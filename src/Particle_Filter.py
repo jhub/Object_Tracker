@@ -5,20 +5,20 @@ import tf
 import pudb
 
 import numpy as np
+import scipy.cluster.hierarchy as hchy
 
-from numpy					import zeros,prod,pi,diag
-from random					import random, gauss
-from math					import hypot
+from numpy					import zeros,prod,pi,diag,ones
+from random					import random
+from math					import hypot, pi, sin, cos, asin, acos, atan2
 from scipy.stats			import norm
 
-from obj_tr_constants		import x,y,th,v_x, v_z, a_x,a_z, data, pred_beh
-from obj_tr_constants 		import g_func_v_p
+from obj_tr_constants		import x,y,th,v_x, v_th, data, pred_beh
 
 
 
 class Particle_Filter(object):
 
-	def __init__(self, d_limits, array_size, g_function, g_res_fn,h_function, R, Q, init_guess):
+	def __init__(self, d_limits, array_size, g_function, g_res_fn,h_function, R, Q, init_guess = None):
 
 		self.g 				= g_function
 		self.g_res_fn 		= g_res_fn
@@ -29,14 +29,15 @@ class Particle_Filter(object):
 		self.array_size 	= array_size
 		self.d_limits		= d_limits
 
-		self.weights			= zeros([self.array_size,1])
+		self.weights		= ones([array_size,1])/array_size
 
-		self.result_points		= zeros([self.array_size,self.d_limits.shape[0]])
+		self.result_points	= zeros([array_size,d_limits.shape[0]])
+		self.result_weights = zeros([array_size,1])
 
 		self.rand_all(init_guess)
 
 
-	def rand_all(self, init_guess): 
+	def rand_all(self, init_guess):
 		for i in range(self.d_limits.shape[0]):
 			if i == 0:
 				self.point_list = np.random.uniform(self.d_limits[i][0],self.d_limits[i][1],self.array_size).reshape((self.array_size, 1))
@@ -44,15 +45,25 @@ class Particle_Filter(object):
 				self.point_list = np.hstack((self.point_list,np.random.uniform(self.d_limits[i][0],self.d_limits[i][1],self.array_size).reshape((self.array_size, 1))))
 		
 		if init_guess is not None and len(self.point_list) > 0:
-			self.point_list[-1] = init_guess
+			self.bias(init_guess)
 
 
-	def upd_points(self, sensor_point):
+	def bias(self, pos):
+		self.point_list[-1] = pos
+
+
+	'''
+	Resample
+	'''
+	def resample(self, sensor_point):
 		#pudb.set_trace()
 		tot_weight = self.set_weights(sensor_point)
 		self.normalize_weights(tot_weight)
-		self.resample()
-		return self.get_mean_and_var(self.point_list)
+		self.upd_points()
+		tot_weight = self.set_weights(sensor_point)
+		self.normalize_weights(tot_weight)
+		#self.bias(sensor_point)
+		#return self.get_mean_and_var(self.point_list)
 
 
 	def set_weights(self, sensor_point):
@@ -74,8 +85,7 @@ class Particle_Filter(object):
 			self.weights[i] = self.weights[i] / tot_weight
 
 
-	def resample(self):
-
+	def upd_points(self):
 		sample_interval = float(1)/self.array_size
 		offset 			= random() * sample_interval
 
@@ -96,27 +106,64 @@ class Particle_Filter(object):
 
 			i += 1
 
-		self.point_list = self.result_points[:]
+		self.point_list 	= self.result_points[:]
 
-		mean = np.mean(self.point_list, axis=0)
-
-
-	def get_mean_and_var(self,pointList):
-		mean = np.mean(pointList, axis=0)
-		cov  = np.cov(pointList.T)
-		return (mean, cov)
-
-
-	def move_all(self,control,dt):
+	'''
+	Update
+	'''
+	def update(self,policy,c_last,dt):
 		for i in range(self.array_size):
-			self.point_list[i] = self.move(self.point_list[i],control,self.g,dt)
+			self.point_list[i] = self.g(self.point_list[i], policy(self.point_list[i],c_last), dt, self.R)
 
 
-	def move(self,point,control,g,dt):
-		mean 				= g(point, control, dt)
-		mean				= diag(gauss(mean, self.R)).copy()
-		return mean
+	# '''
+	# Extra func
+	# '''
+	# def get_mean_and_var(self,pointList):
+	# 	mean 		= np.mean(pointList, axis=0)
+	# 	mean[th] 	= self.get_polar_mean(pointList[:,th-1:th]) #TODO: uncomment
+	# 	return mean
+
+	# def get_polar_mean(self, org_list):
+	# 	tot_sin 	= 0
+	# 	tot_cos  	= 0
+	# 	for ang in org_list:
+	# 		tot_cos		=+ cos(ang)
+	# 		tot_sin		=+ sin(ang)
+
+	# 	return atan2(tot_sin,tot_cos)
+
+	# def get_pt_list(self): 
+	# 	return self.point_list
 
 
-	def get_pt_list(self): 
-		return self.point_list
+	# def circ_diff(self,u,v):
+	# 	mn_val,mx_val = (u,v) if u > v else (v,u)
+	# 	diff1		= mn_val - mx_val
+	# 	diff2		= mx_val - mn_val + 2*pi
+	# 	lesser_diff = diff1 if diff1 < diff2 else diff2
+	# 	return self.rot_diff(lesser_diff)
+
+
+	# def get_polar_mean_cluster(self,org_list):
+	# 	method = "average"
+	# 	Z = hchy.linkage(org_list, method=method, metric=self.circ_diff)
+	# 	max_d = .25
+	# 	lst = hchy.fcluster(Z, max_d, criterion='distance')
+	# 	elm = np.bincount(lst).argmax()
+	# 	ind = [i for i, x in enumerate(lst) if x==elm]
+	# 	cst = org_list[[ind]]
+	# 	u	= self.get_p_mean_clst(cst)
+	# 	return u
+
+	# def rot_diff(self,rot_in):
+	# 	while rot_in > pi:
+	# 		rot_in -= 2 * pi
+	# 	while rot_in < -pi:
+	# 		rot_in += 2 * pi
+	# 	return rot_in
+
+	# def get_p_mean_clst(self,cl_list):
+	# 	cl_cr_list = [(j if j >=0 else j + 2*pi) for j in cl_list]
+	# 	mean = np.mean(cl_cr_list)
+	# 	return self.rot_diff(mean)

@@ -7,12 +7,17 @@ import pudb
 import numpy as np
 
 from object_tracker.msg import behv, state, st_beh
+from nav_msgs.msg		import Odometry
+from turtlesim.msg 		import Pose
 from time 				import sleep
 from math 				import pi
+from obj_tr_constants	import bc_interval
+from obj_tr_constants	import g_func_v_p
 
-x,y,th,v_x, v_z = 0,1,2,3,4
-a_x,a_z 		= 0,1
+x,y,th,v_x, v_th = 0,1,2,3,4
+a_x,a_th 		= 0,1
 data, pred_beh 	= 0,1
+st_ind, ctl_ind = 0,1
 
 '''
 Used to obtain the state/behavior lists and the map updated from those lists
@@ -21,27 +26,8 @@ def get_full_planned(g_func,map_beh, curr_state, beh_dur_list, dt):
 	state_beh_list = []
 	for beh_dur in beh_dur_list:
 		state_beh_list.append([curr_state[:], beh_dur[:]])
-		g_func(curr_state,beh_dur,dt)
+		curr_state = g_func(curr_state,beh_dur,dt)
 	return state_beh_list
-
-'''
-Changes state based on the behv given
-'''
-def g_func_v_p(state, behv, dt):
-	global x,y,th,v_x, v_z,a_x,a_z
-
-	state[v_x] 	= behv[a_x]*dt + state[v_x]
-	state[v_z] 	= behv[a_z]*dt + state[v_z]
-
-	if state[v_z] != 0:
-		state[x] 		= state[x] - (state[v_x] / state[v_z]) * np.sin(state[th]) + (state[v_x] / state[v_z]) * np.sin(state[th] + state[v_z] * dt)
-		state[y] 		= state[y] + (state[v_x] / state[v_z]) * np.cos(state[th]) - (state[v_x] / state[v_z]) * np.cos(state[th] + state[v_z] * dt)
-		state[th] 		= state[th] + state[v_z] * dt
-
-	else:
-		state[x] 		= state[x] + np.cos(state[th]) * dt * state[v_x]
-		state[y] 		= state[y] + np.sin(state[th]) * dt * state[v_x]
-		state[th] 		= state[th]
 
 
 '''
@@ -58,32 +44,33 @@ def get_sample_construct(sample_list, dt):
 	return beh_list
 
 
-def load_beh_lists():
-	un_comp 				= [ [[1,0],1],[[0,0],2],[[0,-pi/4],1],[[0,pi/2],1],[[0,-pi/4],1],[[0,0],4],[[0,pi/4],1],[[0,-pi/2],1],[[0,pi/4],1],[[0,0],2],[[-1,0],1],[[0,0],1] ]
+def load_beh_lists(comp_map):
+	un_comp 				= [ [[.5,0],2],[[1,0],2],[[1,-pi/8],2],[[1,pi/4],2],[[1,-pi/8],2],[[1,0],4],[[1,pi/8],2],[[1,-pi/4],2],[[1,pi/8],2],[[1,0],2],[[.5,0],2] ]
 	beh_list_u				= get_sample_construct(un_comp,bc_interval)
 
-	comp 					= [ [[1,0],2],[[0,0],5],[[-1,0],2],[[0,0],1] ]
+	comp 					= [ [[.5,0],2],[[1,0],18],[[.5,0],2] ]
 	beh_list_c				= get_sample_construct(comp,bc_interval)
 
-	return beh_list_u
+	return beh_list_u if comp_map else beh_list_c
 
 
 def publish_state_beh(state_beh_list, bc_interval):
 	for st_bh in state_beh_list:
 		if not rospy.is_shutdown():
 			s 		= state()
-			s.x 	= st_bh[0][x] 	
-			s.y		= st_bh[0][y] 	
-			s.th 	= st_bh[0][th] 	
-			s.v_x	= st_bh[0][v_x] 
-			s.v_z	= st_bh[0][v_z]
+			s.x 	= st_bh[st_ind][x] 	
+			s.y		= st_bh[st_ind][y] 	
+			s.th 	= st_bh[st_ind][th] 	
+			s.v_x	= st_bh[st_ind][v_x] 
+			s.v_th	= st_bh[st_ind][v_th]
 			s.MAC 	= "K1" 
+			print s
 
 			pub_state.publish(s)
 
 			b 		= behv()
-			b.a_x 	= st_bh[1][a_x] 
-			b.a_z	= st_bh[1][a_z]
+			b.a_x 	= st_bh[ctl_ind][a_x] 
+			b.a_th	= st_bh[ctl_ind][a_th]
 			b.MAC 	= "K1" 
 
 			pub_behv.publish(b)
@@ -100,23 +87,55 @@ def publish_state_beh(state_beh_list, bc_interval):
 		else : break
 
 
+def insert_noise(pose, q):
+	x 		= pose.x
+	y 		= pose.y
+
+	#insert noise here
+
+def turt_pose_cbak(pose):
+	odom_msg = Odometry()
+
+	quaternion = tf.transformations.quaternion_from_euler(0, 0, pose.theta)
+
+#	x,var_x,y,var_y,theta, theta_var = insert_noise(pose, quaternion)
+
+
+	#pudb.set_trace() #For Debugging
+
+	odom_msg.pose.pose.position.x 		= pose.x
+	odom_msg.pose.pose.position.y 		= pose.y
+	odom_msg.pose.pose.position.z 		= 0.0
+	odom_msg.pose.pose.orientation.x 	= quaternion[0]
+	odom_msg.pose.pose.orientation.y 	= quaternion[1]
+	odom_msg.pose.pose.orientation.z 	= quaternion[2]
+	odom_msg.pose.pose.orientation.w 	= quaternion[3]
+
+
+	pub_state.publish(odom_msg)
+
+
 if __name__ == '__main__':
 
 	rospy.init_node('obj_trck', anonymous=True)
 
-	pub_state 				= rospy.Publisher('state_k1', state, queue_size=10)
-	pub_behv				= rospy.Publisher('beh_k1', behv, queue_size=10)
-	pub_st_beh 				= rospy.Publisher('st_beh_k1', st_beh, queue_size=10)
+	rospy.Subscriber("/turtle2/pose", Pose, turt_pose_cbak)
 
-	init_state 				= [0.0,0.0,0.0,0.0,0.0]
-	map_beh 				= [[],[]]
-	bc_interval				= .2
+	pub_state 				= rospy.Publisher('/turtle2/noisedOdom', Odometry, queue_size=10)
+	# pub_behv				= rospy.Publisher('beh_k1', behv, queue_size=10)
+	# pub_st_beh 				= rospy.Publisher('st_beh_k1', st_beh, queue_size=10)
+
+	# init_state 				= [0.0,0.0,0.0]
+	# map_beh 				= [[],[]]
 	#pudb.set_trace() #For Debugging
-	beh_list				= load_beh_lists()
+	# comp_map 				= True
+	# beh_list				= load_beh_lists(comp_map)
 
-	state_beh_list			= get_full_planned(g_func_v_p,map_beh,init_state,beh_list,bc_interval)
+	# state_beh_list			= get_full_planned(g_func_v_p,map_beh,init_state,beh_list,bc_interval)
 
-	for s in state_beh_list:
-		print s
+	# for s in state_beh_list:
+	# 	print s
 
-	publish_state_beh(state_beh_list, bc_interval)
+	# publish_state_beh(state_beh_list, bc_interval)
+
+	rospy.spin()

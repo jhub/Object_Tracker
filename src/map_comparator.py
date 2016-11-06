@@ -8,146 +8,77 @@ import numpy 	as np
 
 from visualization_msgs.msg import Marker, MarkerArray
 from scipy 					import spatial, stats
-from object_tracker.msg 	import behv, state, st_beh
+from geometry_msgs.msg 		import Twist
+from nav_msgs.msg			import Odometry
 from time 					import sleep
 from math 					import pi
+from collections			import deque
 from bayes 					import compromized_state
 from random 				import gauss
-from threading 				import Thread
-from obj_tr_constants		import x,y,th,v_x, v_z, a_x,a_z, data, pred_beh
-from obj_tr_constants 		import g_func_v_p
+from threading 				import Thread, RLock
+from obj_tr_constants		import x,y,th,v_x, v_th, data, pred_beh, bc_interval, array_size
+from obj_tr_constants		import policy, zone
 
-
-MAP_MAX_NGBR 	= 100
-
-st_var			= np.array([1,1,.4,.8,.4])
-beh_var 		= np.array([.2,.2])
 rand_len		= 200
 
-'''
-Used to obtain the state/behavior lists and the map updated from those lists
-'''
-def get_full_planned(g_func,map_st_beh, curr_state, beh_list, dt):
-	#pudb.set_trace() #For Debugging
-	for beh_dur in beh_list:
-		insert_noised(map_st_beh, curr_state, beh_dur)
-		g_func(curr_state,beh_dur,dt)
+#COMPARE_SIZE 	= 3
+INITIAL_PROB 	= 0.05
+UPD_FREQUENCY	= .1
+CPROB_FREQUENCY	= 1
+
+class robot_state(object):
+
+	def __init__(self, ID, policy, zone):
+		self.ID 			= ID
+		init_pos 			= None #np.array([0.0,0.0,0.0])
+		self.bayes 			= compromized_state(INITIAL_PROB, policy, zone, init_pos)
+		rospy.Subscriber(ID + "/noisedOdom", Odometry, self.sns_callback)
+		self.c_particle_pub 	= rospy.Publisher("/" + str(self.ID) + "/c_pointList", MarkerArray, queue_size=array_size)
+		self.unc_particle_pub 	= rospy.Publisher("/" + str(self.ID) + "/unc_pointList", MarkerArray, queue_size=array_size)
+		self.lock 			= RLock()
+		self.callbackOdom 	= None
+
+	'''
+	Updates the particle filter
+	'''
+	def bayes_upd(self):
+		global UPD_FREQUENCY
+		while True:
+			with self.lock:
+				c_pointList, unc_pointList = self.bayes.get_update()
+			publish_particles(self.c_particle_pub, c_pointList, "map", [1,.1,.1])		#RED
+			publish_particles(self.unc_particle_pub, unc_pointList, "map", [.1,1,.1])	#BLUE
+			rospy.sleep(UPD_FREQUENCY)
+
+	'''
+	Resamples and computes probability of compromisation
+	'''
+	def bayes_c_prob(self):
+		global UPD_FREQUENCY, CPROB_FREQUENCY
+		while True:
+			if self.callbackOdom is not None:
+				with self.lock:
+					sensor_pt	= state_to_list(self.callbackOdom)
+					prob  		= self.bayes.compute_c_prob(sensor_pt)
+				print "Likelyhood of being compromised is: " + str(prob)
+				self.callbackOdom = None
+				rospy.sleep(CPROB_FREQUENCY)
+			else:
+				rospy.sleep(UPD_FREQUENCY)
 
 
-def insert_noised(map_st_beh, curr_state, curr_beh):
-	global st_var, beh_var#, rand_len
-	if not len(map_st_beh[data]):
-		map_st_beh[data] 		= np.atleast_2d(curr_state[:] + np.random.normal(0,st_var)).T
-		map_st_beh[pred_beh]	= np.atleast_2d(curr_beh[:] + np.random.normal(0,beh_var)).T
-	else:
-		map_st_beh[data] 		= np.hstack([map_st_beh[data],np.atleast_2d(curr_state[:] + np.random.normal(0,st_var)).T])
-		map_st_beh[pred_beh] 	= np.hstack([map_st_beh[pred_beh],np.atleast_2d(curr_beh[:] + np.random.normal(0,beh_var)).T])
-
-
-'''
-Loads the compromised and uncompromised maps
-'''
-def load_beh_lists():
-	global bc_interval
-	un_comp 				= [ [[1,0],1],[[0,0],2],[[0,-pi/4],1],[[0,pi/2],1],[[0,-pi/4],1],[[0,0],4],[[0,pi/4],1],[[0,-pi/2],1],[[0,pi/4],1],[[0,0],2],[[-1,0],1],[[0,0],1] ]
-	beh_list_u				= get_sample_construct(un_comp,bc_interval)
-
-	comp 					= [ [[1,0],2],[[0,0],5],[[-1,0],2],[[0,0],1] ]
-	beh_list_c				= get_sample_construct(comp,bc_interval)
-
-	return beh_list_u, beh_list_c
-
-
-'''
-Creates a behavior list 
-'''
-def get_sample_construct(sample_list, dt):
-	map_st_beh 		= [[],[]]
-	beh_list 	= []
-
-	for bh in sample_list:
-		for itr in range(int(bh[1]/dt)):
-			beh_list.append(bh[0])
-	
-	return beh_list
-
-
-def state_to_list(state):
-	return [state.x, state.y, state.th, state.v_x, state.v_z]
-
-def beh_to_list(beh):
-	return [beh.a_x, beh.a_z]
-
-def get_mac(msg):
-	return msg.MAC
+	'''
+	Sensor info coming in
+	'''
+	def sns_callback(self, odom):
+		self.callbackOdom = odom
 
 
 '''
-Changes the control of the particle filter
+Visualizaiton methods
 '''
-def beh_callback(beh):
-	global k_list
-	#pudb.set_trace() #For Debugging
-	mac 	= get_mac(beh)
-	beh 	= beh_to_list(beh)
-	k_list[mac].upd_PF_behv(beh)
 
-
-'''
-Sensor info coming in [x,y]
-'''
-def sns_callback(state):
-	global k_list
-	mac 	= get_mac(state)
-	mean 	= k_list[mac].upd_PF_sens(state_to_list(state))
-	get_comp_prob(mean, k_list[mac])
-
-
-def get_comp_prob(state, bayes_obj):
-	global k_list, kd_map_u, kd_map_c, map_st_beh_u, map_st_beh_c, MAP_MAX_NGBR
-
-	u_results 		= kd_map_u.query(state,MAP_MAX_NGBR)
-	c_results 		= kd_map_c.query(state,MAP_MAX_NGBR)
-
-	u_prob			= compare_sb(state, bayes_obj.PF_behv(), u_results, map_st_beh_u)
-	c_prob			= compare_sb(state, bayes_obj.PF_behv(), c_results, map_st_beh_c)
-
-	try:
-		bayes_obj.update_prob(c_prob, u_prob)
-		print "Likelyhood of being compromised is: " + str(bayes_obj.get_c_prob())
-		#print "compromised" if comp_prob > .9 else "Not compromised" if comp_prob < .1 else "Determining"
-	except Exception:
-		print "Not Found Mac"
-
-
-def compare_sb(state, beh, kd_list, map_st_beh):
-	if len(kd_list) > 0 and len(kd_list[1]) > len(map_st_beh[0]): #check dimensions for enough pts (non singular matrix)
-
-		st_kernel 	= stats.gaussian_kde(map_st_beh[data]) 
-		bh_kernel	= stats.gaussian_kde(map_st_beh[pred_beh]) 
-		state_pdf 	= st_kernel.pdf(state)[0]			#Likelyhood of doing a recorded state
-		beh_pdf 	= bh_kernel.pdf(beh)[0]				#Likelyhood of following a behavior prev done
-
-		return state_pdf * beh_pdf
-	raise Exception("Need more points")
-
-
-'''
-Updates the particle filter
-'''
-def bayes_upd(bayes_obj):
-	UPD_FREQUENCY	= rospy.Rate(10)
-	upd = 0
-	while True:
-		pointList = bayes_obj.get_PF_state()
-		#pointlist can be used to display, but should not be used to determine prob
-		if pointList is not None:
-			publish_partcles(pointList) 
-
-		UPD_FREQUENCY.sleep()
-
-
-def publish_partcles(pointList):
+def publish_particles(pub, pointList, frame_id, rbg):
 
 	markerArray = MarkerArray()
 
@@ -158,8 +89,8 @@ def publish_partcles(pointList):
 
 		tempQuaternion				= tf.transformations.quaternion_from_euler(0, 0, point[2])
 
-		marker.pose.position.x = point[0]
-		marker.pose.position.y = point[1]
+		marker.pose.position.x = point[x]
+		marker.pose.position.y = point[y]
 		marker.pose.position.z = 0
 
 		marker.scale.x = 0.4
@@ -167,8 +98,9 @@ def publish_partcles(pointList):
 		marker.scale.z = 0.01
 
 		marker.color.a = 1.0
-		marker.color.r = .1
-		marker.color.b = .7
+		marker.color.r = rbg[0]
+		marker.color.b = rbg[1]
+		marker.color.g = rbg[2]
 
 		marker.pose.orientation.x 	= tempQuaternion[0]
 		marker.pose.orientation.y 	= tempQuaternion[1]
@@ -176,58 +108,120 @@ def publish_partcles(pointList):
 		marker.pose.orientation.w 	= tempQuaternion[3]
 
 		marker.id 				= i
-		marker.header.frame_id 	= "/my_frame"
+		marker.header.frame_id 	= frame_id
 		marker.header.stamp 	= rospy.Time.now()
 		marker.action 			= marker.ADD
 
 		markerArray.markers.append(marker)
 
-	particle_pub.publish(markerArray)
+	pub.publish(markerArray)
 
 
-def print_all(list_in):
-	for i in list_in:
-		for l in i:
-			print tuple(l)
+# def publish_positions(mean_prtcl, rcv_prtcl):
+# 	mean_marker 	= get_marker(mean_prtcl, 1, "/map", [.3,.3,1])
+# 	rcv_pos_marker 	= get_marker(rcv_prtcl, 2, "/map", [1,.3,.3])
+
+# 	mean_pos.publish(mean_marker)
+# 	rcv_pos.publish(rcv_pos_marker)
+
+# def get_marker(particle, ID, frame_id, color):
+# 	marker						= Marker()
+
+# 	marker.pose.position.x = particle[x]
+# 	marker.pose.position.y = particle[y]
+# 	marker.pose.position.z = 0
+
+# 	tempQuaternion				= tf.transformations.quaternion_from_euler(0, 0, particle[th])
+
+# 	marker.scale.x = 0.4
+# 	marker.scale.y = 0.05
+# 	marker.scale.z = 0.01
+
+# 	marker.color.a = 1
+# 	marker.color.r = color[0]
+# 	marker.color.g = color[1]
+# 	marker.color.b = color[2]
+
+# 	marker.pose.orientation.x 	= tempQuaternion[0]
+# 	marker.pose.orientation.y 	= tempQuaternion[1]
+# 	marker.pose.orientation.z 	= tempQuaternion[2]
+# 	marker.pose.orientation.w 	= tempQuaternion[3]
+
+# 	marker.id 				= ID
+# 	marker.header.frame_id 	= frame_id
+# 	marker.header.stamp 	= rospy.Time.now()
+# 	marker.action 			= marker.ADD
+
+# 	return marker
+
+'''
+Used to obtain robot ID from observations. This is post processed
+'''
+def observe_robots(ID_list):
+	global u_list, p_list, policy, zone
+
+	for ID in ID_list:
+		c_list[ID]  	= robot_state(ID, policy, zone) #Can make diff robots have diff policies and zones here
+		u_list[ID] 		= Thread(target = bayes_upd, args = (c_list[ID], ))
+		u_list[ID].setDaemon(True)
+		u_list[ID].start()
+		p_list[ID] 		= Thread(target = bayes_c_prob, args = (c_list[ID], ))
+		p_list[ID].setDaemon(True)
+		p_list[ID].start()
+
+
+def bayes_upd(class_inst):
+	class_inst.bayes_upd()
+
+def bayes_c_prob(class_inst):
+	class_inst.bayes_c_prob()
+
+
+'''
+Extra methods
+'''
+def get_yaw(orientation):
+	quaternion = (
+		orientation.x,
+		orientation.y,
+		orientation.z,
+		orientation.w)
+	return tf.transformations.euler_from_quaternion(quaternion)
+
+
+def state_to_list(odom_msg):
+	return [odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, get_yaw(odom_msg.pose.pose.orientation)[2]]
+
+
+def beh_to_list(twist_msg):
+	bh_list = [twist_msg.linear.x , twist_msg.angular.z]
+	return bh_list
 
 
 if __name__ == '__main__':
-	global bc_interval, kd_map_u, kd_map_c, map_st_beh_u, map_st_beh_c, k_list, particle_pub
+	global c_list, u_list, p_list
+
+	c_list 			= {}
+	u_list, p_list 	= {}, {} #When multiple robots go in and out of range these lists can be used to kill the threads
+
 	rospy.init_node('camp_comp', anonymous=True)
+	#rospy.Subscriber("/secure_estimation/", custum_message_type, observe_robots)
 
-	map_st_beh_u 			= [[],[]]
-	map_st_beh_c 			= [[],[]]
-	k_list 					= {}
-	bc_interval				= .01
+	ID_list = ["F9DRR"]
 
-	init_state_u			= [0.0,0.0,0.0,0.0,0.0]
-	init_state_c			= [0.0,0.0,0.0,0.0,0.0]
-	#pudb.set_trace() #For Debugging
-	beh_list_u, beh_list_c 	= load_beh_lists()
+	observe_robots(ID_list)
 
-	get_full_planned(g_func_v_p,map_st_beh_u,init_state_u,beh_list_u,bc_interval)
-	get_full_planned(g_func_v_p,map_st_beh_c,init_state_c,beh_list_c,bc_interval)
+	# '''
+	# Used as a place holder for the subscriber of a module that should discern new robots coming in and track them
+	# '''
+	# listener_thread 			= Thread(target = observe_robots, args = (ID_list, ))
+	# listener_thread.setDaemon(True)
+	# listener_thread.start()
+	# '''
+	# end placeholder
+	# '''
 
-
-	#print_all([map_st_beh_u[0],map_st_beh_c[0]])
-
-	kd_map_u = spatial.KDTree(map_st_beh_u[data].T)
-	kd_map_c = spatial.KDTree(map_st_beh_c[data].T)
-
-	#This is incoming conections, emulated hardcoded
-	init_pos 		= np.array([0.0,0.0,0.0,0.0,0.0])
-	k_list["K1"] 	= compromized_state(0.05, init_pos)
-
-	rospy.Subscriber("beh_k1", behv, beh_callback)
-	rospy.Subscriber("state_k1", state, sns_callback)
-	particle_pub = rospy.Publisher('pose_cloud', MarkerArray, queue_size=100)
-
-	for MAC in k_list:
-		listener_thread 			= Thread(target = bayes_upd, args = (k_list[MAC], ))
-		listener_thread.setDaemon(True)
-		listener_thread.start()
-
-	print "Ready"
+	print "Map Comparator Ready!"
 
 	rospy.spin()
 
